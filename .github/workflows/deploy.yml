@@ -1,0 +1,60 @@
+name: Sync Gitee and Deploy
+
+on:
+  schedule:
+    # 每 5 分钟检查一次码云变动（cron 表达式：分 时 日 月 周）
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # 支持手动点按钮触发
+
+jobs:
+  sync-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GitHub Code
+        uses: actions/checkout@v3
+        with:
+          ref: beta
+          fetch-depth: 0
+
+      - name: Check and Sync from Gitee
+        id: sync
+        run: |
+          # 1. 配置 Git 用户信息（用于提交/合并）
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 2. 配置 Gitee 仓库地址
+          git remote add gitee https://gitee.com/liucong7708/erp.web.portal.git
+          git fetch gitee beta
+          
+          # 3. 对比本地 GitHub 和远程 Gitee 的 beta 分支是否有更新
+          LOCAL_SHA=$(git rev-parse HEAD)
+          REMOTE_SHA=$(git rev-parse gitee/beta)
+          
+          if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+            echo "检测到码云 beta 分支有新代码，开始同步并触发部署..."
+            git checkout beta
+            git merge gitee/beta --ff-only
+            # 自动把新代码推送到 GitHub 保存
+            git push origin beta
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "码云 beta 分支无新代码，跳过部署。"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node
+        if: steps.sync.outputs.has_changes == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Run Deploy Script
+        if: steps.sync.outputs.has_changes == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          DEPLOY_USERNAME: liucong
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+          DEPLOY_BASE_URL: https://avatar-beta.yjzf.com
+          APP_NAME: 'erp.web.portal'
+        run: |
+          node yjcd-deploy.js --app "$APP_NAME" --yes --allow-live --note "auto-deploy from gitee"
