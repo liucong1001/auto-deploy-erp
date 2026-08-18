@@ -16,19 +16,16 @@ jobs:
       - name: Check Gitee Beta Commit
         id: check_gitee
         run: |
-          # 1. 临时设置 git 凭证辅助助手，传入 GITEE_TOKEN 认证
-          git config --global credential.helper store
-          echo "https://oauth2:${{ secrets.GITEE_TOKEN }}@gitee.com" > ~/.git-credentials
+          # 1. 配置带有 Token 的强认证地址，访问组织仓库 (ujuz/erp.web.portal)
+          git remote add gitee "https://oauth2:${{ secrets.GITEE_TOKEN }}@gitee.com/ujuz/erp.web.portal.git"
 
-          # 2. 拉取 gitee beta 分支的单条提交元数据
-          git remote add gitee https://gitee.com/liucong7708/erp.web.portal.git
-          
+          # 2. 拉取 gitee beta 分支最近 1 条提交元数据
           if ! git fetch gitee beta --depth=1; then
-            echo "::error::git fetch 失败，请检查 GITEE_TOKEN 权限或仓库路径是否正确。"
+            echo "::error::git fetch 失败！请确认 GITEE_TOKEN 对应的账号是否有权限访问 ujuz 企业的 erp.web.portal 仓库。"
             exit 1
           fi
 
-          # 3. 解析 Commit SHA 和 Commit Message
+          # 3. 解析 Commit SHA 和 提交备注信息 (Commit Message)
           LATEST_SHA=$(git rev-parse gitee/beta)
           COMMIT_MSG=$(git log -1 --format="%s" gitee/beta)
 
