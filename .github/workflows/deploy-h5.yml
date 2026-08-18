@@ -1,0 +1,76 @@
+name: Auto Check Gitee H5 & Deploy
+
+on:
+  schedule:
+    # 每 5 分钟检查一次码云 beta 分支变动
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # 支持在 GitHub 页面手动点击按钮触发部署
+
+jobs:
+  check-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Deploy Script
+        uses: actions/checkout@v3
+
+      # 1. 配置 SSH 私钥，复用相同的 GITEE_SSH_KEY
+      - name: Set up SSH Key
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.GITEE_SSH_KEY }}
+
+      - name: Check Gitee Beta Commit
+        id: check_gitee
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan gitee.com >> ~/.ssh/known_hosts
+
+          # 2. 修改为 H5 项目的 Gitee SSH 地址
+          git remote add gitee "git@gitee.com:ujuz/yjyz.h5.portal.git"
+
+          if ! git fetch gitee beta --depth=1; then
+            echo "::error::git fetch 失败！请检查是否有权限访问 yjyz.h5.portal 仓库。"
+            exit 1
+          fi
+
+          LATEST_SHA=$(git rev-parse gitee/beta)
+          COMMIT_MSG=$(git log -1 --format="%s" gitee/beta)
+
+          echo "码云最新 Commit SHA: $LATEST_SHA"
+          echo "码云最新 Commit 备注: $COMMIT_MSG"
+
+          # 独立记录 H5 项目的最后部署记录
+          if [ -f .last_gitee_h5_sha ]; then
+            LAST_SHA=$(cat .last_gitee_h5_sha)
+          else
+            LAST_SHA=""
+          fi
+
+          if [ "$LATEST_SHA" != "$LAST_SHA" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "need_deploy=true" >> $GITHUB_OUTPUT
+            SAFE_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '"\r\n')
+            echo "commit_msg=$SAFE_MSG" >> $GITHUB_OUTPUT
+            echo "$LATEST_SHA" > .last_gitee_h5_sha
+          else
+            echo "码云 beta 分支无新代码，跳过本次部署。"
+            echo "need_deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node
+        if: steps.check_gitee.outputs.need_deploy == 'true'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Run Deploy Script
+        if: steps.check_gitee.outputs.need_deploy == 'true'
+        env:
+          DEPLOY_USERNAME: liucong
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+          DEPLOY_BASE_URL: https://avatar-beta.yjzf.com
+          APP_NAME: 'yjyz.h5.portal' # 3. 修改应用名称
+          NOTE: "${{ steps.check_gitee.outputs.commit_msg }}"
+        run: |
+          echo "检测到代码变动，开始执行部署脚本..."
+          echo "本次构建备注: $NOTE"
+          node yjcd-deploy.js --app "$APP_NAME" --yes --allow-live --note "$NOTE"
