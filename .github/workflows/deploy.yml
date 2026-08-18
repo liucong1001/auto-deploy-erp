@@ -16,20 +16,29 @@ jobs:
       - name: Check Gitee Beta Commit
         id: check_gitee
         run: |
-          # 1. 查询码云 beta 分支最新的 Commit SHA
-          LATEST_SHA=$(git ls-remote https://gitee.com/liucong7708/erp.web.portal.git refs/heads/beta | awk '{print $1}')
-          echo "码云最新 Commit: $LATEST_SHA"
+          # 1. 拉取码云 beta 分支最近 1 条提交元数据
+          git remote add gitee https://gitee.com/liucong7708/erp.web.portal.git
+          git fetch gitee beta --depth=1
 
-          # 2. 读取上一次部署记录的 SHA（保存在本地临时文件或对比）
+          # 2. 获取最新 Commit SHA 和 提交备注信息 (Commit Message)
+          LATEST_SHA=$(git rev-parse gitee/beta)
+          COMMIT_MSG=$(git log -1 --format="%s" gitee/beta)
+          echo "码云最新 Commit SHA: $LATEST_SHA"
+          echo "码云最新 Commit 备注: $COMMIT_MSG"
+
+          # 3. 读取上一次部署记录的 SHA
           if [ -f .last_gitee_sha ]; then
             LAST_SHA=$(cat .last_gitee_sha)
           else
             LAST_SHA=""
           fi
 
-          # 3. 如果是手动触发，或者检测到 Commit ID 发生了改变
+          # 4. 如果是手动触发，或者检测到 Commit ID 发生了改变
           if [ "$LATEST_SHA" != "$LAST_SHA" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "need_deploy=true" >> $GITHUB_OUTPUT
+            # 过滤换行符与双引号，防止脚本参数解析错乱
+            SAFE_MSG=$(echo "$COMMIT_MSG" | tr -d '"\r\n')
+            echo "commit_msg=$SAFE_MSG" >> $GITHUB_OUTPUT
             echo "$LATEST_SHA" > .last_gitee_sha
           else
             echo "码云 beta 分支无新代码，跳过本次部署。"
@@ -49,6 +58,8 @@ jobs:
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
           DEPLOY_BASE_URL: https://avatar-beta.yjzf.com
           APP_NAME: 'erp.web.portal'
+          NOTE: "auto-deploy: ${{ steps.check_gitee.outputs.commit_msg }}"
         run: |
           echo "检测到代码变动，开始执行部署脚本..."
-          node yjcd-deploy.js --app "$APP_NAME" --yes --allow-live --note "auto-deploy triggered by gitee beta push"
+          echo "本次构建备注: $NOTE"
+          node yjcd-deploy.js --app "$APP_NAME" --yes --allow-live --note "$NOTE"
