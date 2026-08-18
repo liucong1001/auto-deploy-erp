@@ -16,33 +16,36 @@ jobs:
       - name: Check Gitee Beta Commit
         id: check_gitee
         run: |
-          # 1. 使用 Gitee API 携带 Token 请求 beta 分支最新提交
-          API_URL="https://gitee.com/api/v5/repos/liucong7708/erp.web.portal/commits?sha=beta&page=1&per_page=1&access_token=${{ secrets.GITEE_TOKEN }}"
-          RESPONSE=$(curl -s -L "$API_URL")
+          # 1. 临时设置 git 凭证辅助助手，传入 GITEE_TOKEN 认证
+          git config --global credential.helper store
+          echo "https://oauth2:${{ secrets.GITEE_TOKEN }}@gitee.com" > ~/.git-credentials
 
-          # 2. 安全提取 Commit SHA 与 Message
-          LATEST_SHA=$(echo "$RESPONSE" | jq -r 'if type=="array" then .[0].sha else empty end')
-          COMMIT_MSG=$(echo "$RESPONSE" | jq -r 'if type=="array" then .[0].commit.message else empty end')
-
-          if [ -z "$LATEST_SHA" ]; then
-            echo "::error::未能成功获取码云提交记录，请检查 GITEE_TOKEN 是否有效或仓库路径是否正确。返回内容为: $RESPONSE"
+          # 2. 拉取 gitee beta 分支的单条提交元数据
+          git remote add gitee https://gitee.com/liucong7708/erp.web.portal.git
+          
+          if ! git fetch gitee beta --depth=1; then
+            echo "::error::git fetch 失败，请检查 GITEE_TOKEN 权限或仓库路径是否正确。"
             exit 1
           fi
+
+          # 3. 解析 Commit SHA 和 Commit Message
+          LATEST_SHA=$(git rev-parse gitee/beta)
+          COMMIT_MSG=$(git log -1 --format="%s" gitee/beta)
 
           echo "码云最新 Commit SHA: $LATEST_SHA"
           echo "码云最新 Commit 备注: $COMMIT_MSG"
 
-          # 3. 读取上一次部署记录的 SHA
+          # 4. 读取上一次部署记录的 SHA
           if [ -f .last_gitee_sha ]; then
             LAST_SHA=$(cat .last_gitee_sha)
           else
             LAST_SHA=""
           fi
 
-          # 4. 判断是否有新代码提交或手动触发
+          # 5. 判断是否有新代码提交或手动触发
           if [ "$LATEST_SHA" != "$LAST_SHA" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "need_deploy=true" >> $GITHUB_OUTPUT
-            # 提取单行简短备注，过滤双引号与换行符
+            # 过滤换行符与双引号
             SAFE_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '"\r\n')
             echo "commit_msg=$SAFE_MSG" >> $GITHUB_OUTPUT
             echo "$LATEST_SHA" > .last_gitee_sha
