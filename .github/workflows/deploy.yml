@@ -16,28 +16,25 @@ jobs:
       - name: Check Gitee Beta Commit
         id: check_gitee
         run: |
-          # 1. 配置 Git 认证 Header，解决私有仓库凭证报错
-          git config --global extraheader "AUTHORIZATION: token ${{ secrets.GITEE_TOKEN }}"
-
-          # 2. 拉取码云 beta 分支最近 1 条提交元数据
-          git remote add gitee https://gitee.com/liucong7708/erp.web.portal.git
+          # 1. 使用带有 Token 的认证 URL 拉取码云 beta 分支最近 1 条提交元数据
+          git remote add gitee https://oauth2:${{ secrets.GITEE_TOKEN }}@gitee.com/liucong7708/erp.web.portal.git
           git fetch gitee beta --depth=1
 
-          # 3. 解析最新 Commit SHA 和 提交备注信息 (Commit Message)
+          # 2. 解析最新 Commit SHA 和 提交备注信息 (Commit Message)
           LATEST_SHA=$(git rev-parse gitee/beta)
           COMMIT_MSG=$(git log -1 --format="%s" gitee/beta)
 
           echo "码云最新 Commit SHA: $LATEST_SHA"
           echo "码云最新 Commit 备注: $COMMIT_MSG"
 
-          # 4. 读取上一次部署记录的 SHA
+          # 3. 读取上一次部署记录的 SHA
           if [ -f .last_gitee_sha ]; then
             LAST_SHA=$(cat .last_gitee_sha)
           else
             LAST_SHA=""
           fi
 
-          # 5. 判断是否有新代码提交或手动触发
+          # 4. 判断是否有新代码提交或手动触发
           if [ "$LATEST_SHA" != "$LAST_SHA" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "need_deploy=true" >> $GITHUB_OUTPUT
             # 过滤换行符与双引号
