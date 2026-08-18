@@ -13,38 +13,45 @@ jobs:
       - name: Checkout Deploy Script
         uses: actions/checkout@v3
 
+      # 1. 配置 SSH 私钥与 Known Hosts，实现 SSH 无密访问 Gitee
+      - name: Set up SSH Key
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.GITEE_SSH_KEY }}
+
       - name: Check Gitee Beta Commit
         id: check_gitee
         run: |
-          # 1. 拼接 用户名:Token 强认证地址，访问 ujuz 企业的 erp.web.portal 仓库
-          GITEE_REPO_URL="https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_TOKEN }}@gitee.com/ujuz/erp.web.portal.git"
+          # 2. 显式添加 gitee.com 到 known_hosts 防止 SSH 首次交互确认卡死
+          mkdir -p ~/.ssh
+          ssh-keyscan gitee.com >> ~/.ssh/known_hosts
 
-          git remote add gitee "$GITEE_REPO_URL"
+          # 3. 使用 SSH 地址关联 Gitee 仓库
+          git remote add gitee "git@gitee.com:ujuz/erp.web.portal.git"
 
-          # 2. 拉取 gitee beta 分支最近 1 条提交元数据
+          # 4. 拉取 gitee beta 分支最近 1 条提交元数据
           if ! git fetch gitee beta --depth=1; then
-            echo "::error::git fetch 失败！请确认 GITEE_USERNAME (${{ secrets.GITEE_USERNAME }}) 是否具备 ujuz/erp.web.portal 仓库的访问权限。"
+            echo "::error::git fetch 失败！请检查 GITEE_SSH_KEY 公钥是否已正确配置在 Gitee 账号或仓库部署公钥中。"
             exit 1
           fi
 
-          # 3. 解析 Commit SHA 和 提交备注信息 (Commit Message)
+          # 5. 解析 Commit SHA 和 提交备注信息
           LATEST_SHA=$(git rev-parse gitee/beta)
           COMMIT_MSG=$(git log -1 --format="%s" gitee/beta)
 
           echo "码云最新 Commit SHA: $LATEST_SHA"
           echo "码云最新 Commit 备注: $COMMIT_MSG"
 
-          # 4. 读取上一次部署记录的 SHA
+          # 6. 读取上一次部署记录的 SHA
           if [ -f .last_gitee_sha ]; then
             LAST_SHA=$(cat .last_gitee_sha)
           else
             LAST_SHA=""
           fi
 
-          # 5. 判断是否有新代码提交或手动触发
+          # 7. 判断是否有新代码提交或手动触发
           if [ "$LATEST_SHA" != "$LAST_SHA" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "need_deploy=true" >> $GITHUB_OUTPUT
-            # 过滤换行符与双引号
             SAFE_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '"\r\n')
             echo "commit_msg=$SAFE_MSG" >> $GITHUB_OUTPUT
             echo "$LATEST_SHA" > .last_gitee_sha
