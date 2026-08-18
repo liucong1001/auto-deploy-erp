@@ -16,12 +16,14 @@ jobs:
       - name: Check Gitee Beta Commit
         id: check_gitee
         run: |
-          # 1. 配置带有 Token 的强认证地址，访问组织仓库 (ujuz/erp.web.portal)
-          git remote add gitee "https://oauth2:${{ secrets.GITEE_TOKEN }}@gitee.com/ujuz/erp.web.portal.git"
+          # 1. 拼接 用户名:Token 强认证地址，访问 ujuz 企业的 erp.web.portal 仓库
+          GITEE_REPO_URL="https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_TOKEN }}@gitee.com/ujuz/erp.web.portal.git"
+
+          git remote add gitee "$GITEE_REPO_URL"
 
           # 2. 拉取 gitee beta 分支最近 1 条提交元数据
           if ! git fetch gitee beta --depth=1; then
-            echo "::error::git fetch 失败！请确认 GITEE_TOKEN 对应的账号是否有权限访问 ujuz 企业的 erp.web.portal 仓库。"
+            echo "::error::git fetch 失败！请确认 GITEE_USERNAME (${{ secrets.GITEE_USERNAME }}) 是否具备 ujuz/erp.web.portal 仓库的访问权限。"
             exit 1
           fi
 
