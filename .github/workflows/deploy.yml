@@ -73,7 +73,7 @@ jobs:
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
           DEPLOY_BASE_URL: https://avatar-beta.yjzf.com
           APP_NAME: 'erp.web.portal'
-          NOTE: "auto-deploy: ${{ steps.check_gitee.outputs.commit_msg }}"
+          NOTE: "${{ steps.check_gitee.outputs.commit_msg }}"
         run: |
           echo "检测到代码变动，开始执行部署脚本..."
           echo "本次构建备注: $NOTE"
