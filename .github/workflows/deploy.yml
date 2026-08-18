@@ -13,7 +13,16 @@ jobs:
       - name: Checkout Deploy Script
         uses: actions/checkout@v3
 
-      # 1. 配置 SSH 私钥与 Known Hosts，实现 SSH 无密访问 Gitee
+      # 【关键修复】：从 Cache 中恢复上一次保存的 .last_gitee_sha 文件
+      - name: Restore Last SHA Cache
+        uses: actions/cache@v3
+        with:
+          path: .last_gitee_sha
+          key: gitee-last-sha-erp-${{ github.run_id }}
+          restore-keys: |
+            gitee-last-sha-erp-
+
+      # 1. 配置 SSH 私钥
       - name: Set up SSH Key
         uses: webfactory/ssh-agent@v0.8.0
         with:
@@ -22,43 +31,49 @@ jobs:
       - name: Check Gitee Beta Commit
         id: check_gitee
         run: |
-          # 2. 显式添加 gitee.com 到 known_hosts 防止 SSH 首次交互确认卡死
           mkdir -p ~/.ssh
           ssh-keyscan gitee.com >> ~/.ssh/known_hosts
 
-          # 3. 使用 SSH 地址关联 Gitee 仓库
           git remote add gitee "git@gitee.com:ujuz/erp.web.portal.git"
 
-          # 4. 拉取 gitee beta 分支最近 1 条提交元数据
           if ! git fetch gitee beta --depth=1; then
-            echo "::error::git fetch 失败！请检查 GITEE_SSH_KEY 公钥是否已正确配置在 Gitee 账号或仓库部署公钥中。"
+            echo "::error::git fetch 失败！请检查 GITEE_SSH_KEY 公钥是否已正确配置。"
             exit 1
           fi
 
-          # 5. 解析 Commit SHA 和 提交备注信息
           LATEST_SHA=$(git rev-parse gitee/beta)
           COMMIT_MSG=$(git log -1 --format="%s" gitee/beta)
 
           echo "码云最新 Commit SHA: $LATEST_SHA"
           echo "码云最新 Commit 备注: $COMMIT_MSG"
 
-          # 6. 读取上一次部署记录的 SHA
+          # 读取 Cache 中恢复的 SHA
           if [ -f .last_gitee_sha ]; then
             LAST_SHA=$(cat .last_gitee_sha)
           else
             LAST_SHA=""
           fi
 
-          # 7. 判断是否有新代码提交或手动触发
+          echo "上次已部署 SHA: $LAST_SHA"
+
           if [ "$LATEST_SHA" != "$LAST_SHA" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "need_deploy=true" >> $GITHUB_OUTPUT
             SAFE_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '"\r\n')
             echo "commit_msg=$SAFE_MSG" >> $GITHUB_OUTPUT
+            # 更新文件内容
             echo "$LATEST_SHA" > .last_gitee_sha
           else
             echo "码云 beta 分支无新代码，跳过本次部署。"
             echo "need_deploy=false" >> $GITHUB_OUTPUT
           fi
+
+      # 【关键修复】：如果本次更新了 SHA，则将最新的 .last_gitee_sha 保存到 Cache
+      - name: Save Last SHA Cache
+        if: steps.check_gitee.outputs.need_deploy == 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: .last_gitee_sha
+          key: gitee-last-sha-erp-${{ github.run_id }}
 
       - name: Setup Node
         if: steps.check_gitee.outputs.need_deploy == 'true'
@@ -73,7 +88,7 @@ jobs:
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
           DEPLOY_BASE_URL: https://avatar-beta.yjzf.com
           APP_NAME: 'erp.web.portal'
-          NOTE: "${{ steps.check_gitee.outputs.commit_msg }}"
+          NOTE: "auto-deploy: ${{ steps.check_gitee.outputs.commit_msg }}"
         run: |
           echo "检测到代码变动，开始执行部署脚本..."
           echo "本次构建备注: $NOTE"
