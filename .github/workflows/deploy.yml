@@ -1,60 +1,54 @@
-name: Sync Gitee and Deploy
+name: Auto Check Gitee & Deploy
 
 on:
   schedule:
-    # 每 5 分钟检查一次码云变动（cron 表达式：分 时 日 月 周）
+    # 每 5 分钟检查一次码云 beta 分支变动
     - cron: '*/5 * * * *'
-  workflow_dispatch: # 支持手动点按钮触发
+  workflow_dispatch: # 支持在 GitHub 页面手动点击按钮触发部署
 
 jobs:
-  sync-and-deploy:
+  check-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout GitHub Code
+      - name: Checkout Deploy Script
         uses: actions/checkout@v3
-        with:
-          ref: beta
-          fetch-depth: 0
 
-      - name: Check and Sync from Gitee
-        id: sync
+      - name: Check Gitee Beta Commit
+        id: check_gitee
         run: |
-          # 1. 配置 Git 用户信息（用于提交/合并）
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # 1. 查询码云 beta 分支最新的 Commit SHA
+          LATEST_SHA=$(git ls-remote https://gitee.com/liucong7708/erp.web.portal.git refs/heads/beta | awk '{print $1}')
+          echo "码云最新 Commit: $LATEST_SHA"
 
-          # 2. 配置 Gitee 仓库地址
-          git remote add gitee https://gitee.com/liucong7708/erp.web.portal.git
-          git fetch gitee beta
-          
-          # 3. 对比本地 GitHub 和远程 Gitee 的 beta 分支是否有更新
-          LOCAL_SHA=$(git rev-parse HEAD)
-          REMOTE_SHA=$(git rev-parse gitee/beta)
-          
-          if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-            echo "检测到码云 beta 分支有新代码，开始同步并触发部署..."
-            git checkout beta
-            git merge gitee/beta --ff-only
-            # 自动把新代码推送到 GitHub 保存
-            git push origin beta
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+          # 2. 读取上一次部署记录的 SHA（保存在本地临时文件或对比）
+          if [ -f .last_gitee_sha ]; then
+            LAST_SHA=$(cat .last_gitee_sha)
           else
-            echo "码云 beta 分支无新代码，跳过部署。"
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+            LAST_SHA=""
+          fi
+
+          # 3. 如果是手动触发，或者检测到 Commit ID 发生了改变
+          if [ "$LATEST_SHA" != "$LAST_SHA" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "need_deploy=true" >> $GITHUB_OUTPUT
+            echo "$LATEST_SHA" > .last_gitee_sha
+          else
+            echo "码云 beta 分支无新代码，跳过本次部署。"
+            echo "need_deploy=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Setup Node
-        if: steps.sync.outputs.has_changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.check_gitee.outputs.need_deploy == 'true'
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
       - name: Run Deploy Script
-        if: steps.sync.outputs.has_changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.check_gitee.outputs.need_deploy == 'true'
         env:
           DEPLOY_USERNAME: liucong
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
           DEPLOY_BASE_URL: https://avatar-beta.yjzf.com
           APP_NAME: 'erp.web.portal'
         run: |
-          node yjcd-deploy.js --app "$APP_NAME" --yes --allow-live --note "auto-deploy from gitee"
+          echo "检测到代码变动，开始执行部署脚本..."
+          node yjcd-deploy.js --app "$APP_NAME" --yes --allow-live --note "auto-deploy triggered by gitee beta push"
