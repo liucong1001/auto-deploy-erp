@@ -1,10 +1,11 @@
 name: Auto Check Gitee & Deploy
 
 on:
-  schedule:
-    # 简化写法：周一至周五 UTC 1:00-12:00（北京时间 09:00 - 20:00）每 5 分钟跑一次
-    - cron: '*/5 1-12 * * 1-5'
-  workflow_dispatch: # 保留页面手动点击按钮触发
+  # 监听阿里云 FC 转发过来的 Gitee Push 事件
+  repository_dispatch:
+    types: [gitee_push]
+  # 保留页面手动点击按钮触发
+  workflow_dispatch:
 
 jobs:
   check-and-deploy:
@@ -13,22 +14,14 @@ jobs:
       - name: Checkout Deploy Script
         uses: actions/checkout@v3
 
-      # 【关键修复】：从 Cache 中恢复上一次保存的 .last_gitee_sha 文件
-      - name: Restore Last SHA Cache
-        uses: actions/cache@v3
-        with:
-          path: .last_gitee_sha
-          key: gitee-last-sha-erp-${{ github.run_id }}
-          restore-keys: |
-            gitee-last-sha-erp-
-
-      # 1. 配置 SSH 私钥
+      # 1. 配置 SSH 私钥以拉取 Gitee 代码
       - name: Set up SSH Key
         uses: webfactory/ssh-agent@v0.8.0
         with:
           ssh-private-key: ${{ secrets.GITEE_SSH_KEY }}
 
-      - name: Check Gitee Beta Commit
+      # 2. 校验并获取 Gitee 最新提交信息
+      - name: Fetch Gitee Beta Info
         id: check_gitee
         run: |
           mkdir -p ~/.ssh
@@ -37,52 +30,24 @@ jobs:
           git remote add gitee "git@gitee.com:ujuz/erp.web.portal.git"
 
           if ! git fetch gitee beta --depth=1; then
-            echo "::error::git fetch 失败！请检查 GITEE_SSH_KEY 公钥是否已正确配置。"
+            echo "::error::git fetch 失败！请检查 GITEE_SSH_KEY 公钥配置。"
             exit 1
           fi
 
-          LATEST_SHA=$(git rev-parse gitee/beta)
           COMMIT_MSG=$(git log -1 --format="%s" gitee/beta)
+          SAFE_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '"\r\n')
+          
+          echo "码云最新 Commit 备注: $SAFE_MSG"
+          echo "commit_msg=$SAFE_MSG" >> $GITHUB_OUTPUT
 
-          echo "码云最新 Commit SHA: $LATEST_SHA"
-          echo "码云最新 Commit 备注: $COMMIT_MSG"
-
-          # 读取 Cache 中恢复的 SHA
-          if [ -f .last_gitee_sha ]; then
-            LAST_SHA=$(cat .last_gitee_sha)
-          else
-            LAST_SHA=""
-          fi
-
-          echo "上次已部署 SHA: $LAST_SHA"
-
-          if [ "$LATEST_SHA" != "$LAST_SHA" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "need_deploy=true" >> $GITHUB_OUTPUT
-            SAFE_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '"\r\n')
-            echo "commit_msg=$SAFE_MSG" >> $GITHUB_OUTPUT
-            # 更新文件内容
-            echo "$LATEST_SHA" > .last_gitee_sha
-          else
-            echo "码云 beta 分支无新代码，跳过本次部署。"
-            echo "need_deploy=false" >> $GITHUB_OUTPUT
-          fi
-
-      # 【关键修复】：如果本次更新了 SHA，则将最新的 .last_gitee_sha 保存到 Cache
-      - name: Save Last SHA Cache
-        if: steps.check_gitee.outputs.need_deploy == 'true'
-        uses: actions/cache/save@v3
-        with:
-          path: .last_gitee_sha
-          key: gitee-last-sha-erp-${{ github.run_id }}
-
+      # 3. 环境准备
       - name: Setup Node
-        if: steps.check_gitee.outputs.need_deploy == 'true'
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
+      # 4. 执行部署
       - name: Run Deploy Script
-        if: steps.check_gitee.outputs.need_deploy == 'true'
         env:
           DEPLOY_USERNAME: liucong
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
@@ -90,6 +55,6 @@ jobs:
           APP_NAME: 'erp.web.portal'
           NOTE: "${{ steps.check_gitee.outputs.commit_msg }}"
         run: |
-          echo "检测到代码变动，开始执行部署脚本..."
+          echo "收到 Gitee 实时变动通知，开始执行部署脚本..."
           echo "本次构建备注: $NOTE"
           node yjcd-deploy.js --app "$APP_NAME" --yes --allow-live --note "$NOTE"
